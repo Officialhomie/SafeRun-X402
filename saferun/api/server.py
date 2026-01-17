@@ -46,9 +46,9 @@ app.add_middleware(
 )
 
 # Global instances
-orchestrator = WorkflowOrchestrator()
-checkpoint_manager = CheckpointManager()
 x402 = X402Integration()
+orchestrator = WorkflowOrchestrator(x402_integration=x402)
+checkpoint_manager = CheckpointManager()
 
 # Templates setup
 BASE_DIR = Path(__file__).resolve().parent.parent
