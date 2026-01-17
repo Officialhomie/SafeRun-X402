@@ -5,6 +5,7 @@ from .models import (
     CheckpointSnapshot, ApprovalRequest, ApprovalResponse,
     ApprovalDecision, ExecutionState
 )
+from saferun.core.checkpoints.capture import StateCapture
 
 class WorkflowOrchestrator:
     """
@@ -15,8 +16,10 @@ class WorkflowOrchestrator:
     rollbacks, and settlement.
     """
 
-    def __init__(self):
+    def __init__(self, x402_integration=None):
         self.active_workflows: Dict[str, WorkflowExecution] = {}
+        self.x402_integration = x402_integration
+        self.state_capture = StateCapture()
         logger.info("WorkflowOrchestrator initialized")
 
     def initialize_workflow(self, config: WorkflowConfig) -> WorkflowExecution:
@@ -52,7 +55,7 @@ class WorkflowOrchestrator:
         logger.info(f"Workflow {workflow_id} started execution")
         return True
 
-    def create_checkpoint(
+    async def create_checkpoint(
         self,
         workflow_id: str,
         execution_state: ExecutionState
@@ -62,6 +65,7 @@ class WorkflowOrchestrator:
 
         This creates an immutable snapshot of everything the agent
         has done so far, which enables rollback if approval is rejected.
+        Also stores the checkpoint as an x402 artifact for persistence.
         """
         workflow = self.active_workflows.get(workflow_id)
         if not workflow:
@@ -81,6 +85,30 @@ class WorkflowOrchestrator:
             execution_state=execution_state,
             approval_required=checkpoint_config.requires_approval
         )
+
+        # Store checkpoint as x402 artifact
+        if self.x402_integration:
+            try:
+                # Serialize the execution state
+                serialized_state = self.state_capture.serialize_state(execution_state)
+                
+                # Store as x402 artifact
+                artifact_uri = await self.x402_integration.store_checkpoint_artifact(
+                    checkpoint_id=snapshot.checkpoint_id,
+                    checkpoint_data=serialized_state,
+                    metadata={
+                        "workflow_id": workflow_id,
+                        "snapshot_id": snapshot.snapshot_id,
+                        "checkpoint_name": checkpoint_config.name,
+                        "approval_required": checkpoint_config.requires_approval
+                    }
+                )
+                
+                snapshot.artifact_uri = artifact_uri
+                logger.info(f"Checkpoint {snapshot.snapshot_id} stored as x402 artifact: {artifact_uri}")
+            except Exception as e:
+                logger.error(f"Failed to store checkpoint as x402 artifact: {e}")
+                # Continue without artifact storage - checkpoint still created locally
 
         workflow.snapshots.append(snapshot)
         logger.info(f"Checkpoint {snapshot.snapshot_id} created for workflow {workflow_id}")
