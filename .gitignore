@@ -11,10 +11,10 @@ build/
 
 # Documentation files
 *.md
+!README.md
 ARCHITECTURE.md
 IMPLEMENTATION_SUMMARY.md
 PROJECT_STATUS.md
 QUICKSTART.md
 scope.md
 Idea.md
-# README.md is tracked
