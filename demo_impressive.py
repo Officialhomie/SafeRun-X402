@@ -119,7 +119,7 @@ async def demo_financial_trade_execution():
         }
     )
 
-    snapshot = orchestrator.create_checkpoint(workflow_id, execution_state)
+    snapshot = await orchestrator.create_checkpoint(workflow_id, execution_state)
 
     print("⏸️  SafeRun: Checkpoint reached - requesting human approval\n")
 
@@ -328,7 +328,7 @@ async def demo_code_deployment_prevention():
         }
     )
 
-    snapshot = orchestrator.create_checkpoint(workflow_id, execution_state)
+    snapshot = await orchestrator.create_checkpoint(workflow_id, execution_state)
 
     print("⏸️  SafeRun: Checkpoint reached - requesting deployment approval\n")
 
@@ -508,7 +508,7 @@ async def demo_research_workflow_quality():
         ]
     )
 
-    snapshot = orchestrator.create_checkpoint(workflow_id, execution_state)
+    snapshot = await orchestrator.create_checkpoint(workflow_id, execution_state)
 
     print("📋 RESEARCH SUMMARY:")
     print("   Found 3 strong precedents:")
