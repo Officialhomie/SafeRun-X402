@@ -9,11 +9,55 @@ This module handles integration with all five x402 primitives:
 5. Marketplace - supervisor discovery
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 from loguru import logger
 import httpx
+import asyncio
+from functools import wraps
 
 from saferun.config import settings
+
+
+def retry_on_failure(max_retries: int = 3, delay: float = 1.0, backoff: float = 2.0):
+    """
+    Decorator to retry async functions on failure.
+    
+    Args:
+        max_retries: Maximum number of retry attempts
+        delay: Initial delay between retries (seconds)
+        backoff: Multiplier for delay after each retry
+    """
+    def decorator(func: Callable):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_exception = None
+            current_delay = delay
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except (httpx.HTTPError, httpx.TimeoutException) as e:
+                    last_exception = e
+                    if attempt < max_retries:
+                        logger.warning(
+                            f"{func.__name__} failed (attempt {attempt + 1}/{max_retries + 1}): {e}. "
+                            f"Retrying in {current_delay}s..."
+                        )
+                        await asyncio.sleep(current_delay)
+                        current_delay *= backoff
+                    else:
+                        logger.error(f"{func.__name__} failed after {max_retries + 1} attempts")
+                except Exception as e:
+                    # Don't retry on non-HTTP errors
+                    logger.error(f"{func.__name__} failed with non-retryable error: {e}")
+                    raise
+            
+            # If we exhausted retries, raise the last exception
+            if last_exception:
+                raise last_exception
+                
+        return wrapper
+    return decorator
 
 
 class X402Client:
@@ -27,11 +71,18 @@ class X402Client:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or settings.x402_api_key
         self.base_url = settings.x402_api_url
+        
+        if not self.api_key:
+            raise ValueError("X402_API_KEY is required. Please set it in your environment or config.")
+        if not self.base_url or self.base_url == "https://api.x402.io":
+            raise ValueError("X402_API_URL must be set to a valid x402 API endpoint.")
+        
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
-            headers={"Authorization": f"Bearer {self.api_key}"}
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=30.0
         )
-        logger.info("X402Client initialized")
+        logger.info(f"X402Client initialized with API: {self.base_url}")
 
     async def close(self):
         """Close the HTTP client"""
@@ -39,6 +90,7 @@ class X402Client:
 
     # ==================== Jobs ====================
 
+    @retry_on_failure(max_retries=3, delay=1.0)
     async def create_job(
         self,
         job_type: str,
@@ -70,33 +122,42 @@ class X402Client:
         }
 
         try:
-            # Mock implementation - replace with actual x402 API call
-            job_id = f"job_{hash(str(payload)) % 1000000}"
-            result = {
-                "job_id": job_id,
-                "status": "created",
-                "escrow_locked": True,
-                **payload
-            }
-
-            logger.info(f"Job created: {job_id}")
+            response = await self.client.post(
+                "/jobs",
+                json=payload
+            )
+            response.raise_for_status()
+            result = response.json()
+            logger.info(f"Job created: {result.get('job_id')}")
             return result
-
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error creating job: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error creating job: {e}")
+            raise
         except Exception as e:
             logger.error(f"Failed to create job: {e}")
             raise
 
+    @retry_on_failure(max_retries=2, delay=0.5)
+    @retry_on_failure(max_retries=2, delay=0.5)
     async def get_job(self, job_id: str) -> Dict[str, Any]:
         """Retrieve job details"""
         logger.debug(f"Fetching job {job_id}")
 
-        # Mock implementation
-        return {
-            "job_id": job_id,
-            "status": "active",
-            "created_at": "2024-01-17T00:00:00Z"
-        }
+        try:
+            response = await self.client.get(f"/jobs/{job_id}")
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error fetching job: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error fetching job: {e}")
+            raise
 
+    @retry_on_failure(max_retries=2, delay=0.5)
     async def update_job_status(
         self,
         job_id: str,
@@ -106,9 +167,21 @@ class X402Client:
         """Update job status (executing, completed, failed, etc.)"""
         logger.info(f"Updating job {job_id} status to {status}")
 
-        # Mock implementation
-        return True
+        try:
+            response = await self.client.patch(
+                f"/jobs/{job_id}",
+                json={"status": status, "metadata": metadata or {}}
+            )
+            response.raise_for_status()
+            return True
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error updating job status: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error updating job status: {e}")
+            raise
 
+    @retry_on_failure(max_retries=2, delay=0.5)
     async def create_approval_subjob(
         self,
         parent_job_id: str,
@@ -123,19 +196,29 @@ class X402Client:
         """
         logger.info(f"Creating approval sub-job for checkpoint {checkpoint_id}")
 
-        subjob = {
-            "subjob_id": f"approval_{checkpoint_id}",
-            "parent_job_id": parent_job_id,
-            "type": "approval_request",
-            "supervisor_id": supervisor_id,
-            "data": approval_data,
-            "status": "pending"
-        }
-
-        return subjob
+        try:
+            response = await self.client.post(
+                "/jobs/subjobs",
+                json={
+                    "parent_job_id": parent_job_id,
+                    "checkpoint_id": checkpoint_id,
+                    "supervisor_id": supervisor_id,
+                    "type": "approval_request",
+                    "data": approval_data
+                }
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error creating approval sub-job: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error creating approval sub-job: {e}")
+            raise
 
     # ==================== Escrow ====================
 
+    @retry_on_failure(max_retries=3, delay=1.0)
     async def lock_escrow(
         self,
         workflow_id: str,
@@ -157,17 +240,28 @@ class X402Client:
         """
         logger.info(f"Locking escrow: {amount} for workflow {workflow_id}")
 
-        escrow = {
-            "escrow_id": f"escrow_{workflow_id}",
+        payload = {
             "workflow_id": workflow_id,
             "amount": amount,
             "poster_id": poster_id,
-            "executor_id": executor_id,
-            "status": "locked",
-            "released": 0.0
+            "executor_id": executor_id
         }
 
-        return escrow
+        try:
+            response = await self.client.post(
+                "/escrow/lock",
+                json=payload
+            )
+            response.raise_for_status()
+            result = response.json()
+            logger.info(f"Escrow locked: {result.get('escrow_id')}")
+            return result
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error locking escrow: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error locking escrow: {e}")
+            raise
 
     async def release_escrow(
         self,
@@ -190,9 +284,28 @@ class X402Client:
         """
         logger.info(f"Releasing {amount} from escrow {escrow_id} to {recipient_id}")
 
-        # Mock implementation
-        return True
+        payload = {
+            "escrow_id": escrow_id,
+            "amount": amount,
+            "recipient_id": recipient_id,
+            "reason": reason
+        }
 
+        try:
+            response = await self.client.post(
+                "/escrow/release",
+                json=payload
+            )
+            response.raise_for_status()
+            return True
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error releasing escrow: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error releasing escrow: {e}")
+            raise
+
+    @retry_on_failure(max_retries=3, delay=1.0)
     async def split_payment(
         self,
         escrow_id: str,
@@ -212,16 +325,22 @@ class X402Client:
         total = sum(split["amount"] for split in splits)
         logger.debug(f"Total split amount: {total}")
 
-        # Mock implementation
-        for split in splits:
-            await self.release_escrow(
-                escrow_id,
-                split["amount"],
-                split["recipient_id"],
-                split["reason"]
+        try:
+            response = await self.client.post(
+                "/escrow/split",
+                json={
+                    "escrow_id": escrow_id,
+                    "splits": splits
+                }
             )
-
-        return True
+            response.raise_for_status()
+            return True
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error splitting payment: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error splitting payment: {e}")
+            raise
 
     async def calculate_settlement(
         self,
@@ -266,6 +385,7 @@ class X402Client:
 
     # ==================== Artifacts ====================
 
+    @retry_on_failure(max_retries=3, delay=1.0)
     async def create_artifact(
         self,
         artifact_type: str,
@@ -286,34 +406,53 @@ class X402Client:
         logger.info(f"Creating artifact: {artifact_type}")
 
         import hashlib
+        from datetime import datetime
         content_hash = hashlib.sha256(content.encode()).hexdigest()
 
-        artifact = {
-            "artifact_id": f"artifact_{content_hash[:16]}",
-            "uri": f"x402://artifacts/{content_hash}",
+        payload = {
             "type": artifact_type,
+            "content": content,
             "content_hash": content_hash,
-            "size_bytes": len(content),
-            "metadata": metadata,
-            "created_at": "2024-01-17T00:00:00Z"
+            "metadata": metadata
         }
 
-        logger.info(f"Artifact created: {artifact['artifact_id']}")
-        return artifact
+        try:
+            response = await self.client.post(
+                "/artifacts",
+                json=payload
+            )
+            response.raise_for_status()
+            result = response.json()
+            logger.info(f"Artifact created: {result.get('artifact_id')}")
+            return result
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error creating artifact: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error creating artifact: {e}")
+            raise
 
+    @retry_on_failure(max_retries=2, delay=0.5)
     async def get_artifact(self, artifact_uri: str) -> Dict[str, Any]:
         """Retrieve artifact by URI"""
         logger.debug(f"Fetching artifact: {artifact_uri}")
 
-        # Mock implementation
-        return {
-            "uri": artifact_uri,
-            "content": "{}",
-            "metadata": {}
-        }
+        try:
+            # Extract artifact ID from URI (format: x402://artifacts/{hash})
+            artifact_id = artifact_uri.split("/")[-1] if "/" in artifact_uri else artifact_uri
+            response = await self.client.get(f"/artifacts/{artifact_id}")
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error fetching artifact: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error fetching artifact: {e}")
+            raise
 
     # ==================== Identity ====================
 
+    @retry_on_failure(max_retries=2, delay=0.5)
     async def verify_identity(
         self,
         user_id: str,
@@ -326,19 +465,41 @@ class X402Client:
         """
         logger.debug(f"Verifying identity {user_id} for role {role}")
 
-        # Mock implementation - always returns True
-        return True
+        try:
+            response = await self.client.post(
+                "/identity/verify",
+                json={
+                    "user_id": user_id,
+                    "role": role
+                }
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result.get("verified", False)
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error verifying identity: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error verifying identity: {e}")
+            raise
 
+    @retry_on_failure(max_retries=2, delay=0.5)
     async def get_user_profile(self, user_id: str) -> Dict[str, Any]:
         """Get user profile information"""
-        return {
-            "user_id": user_id,
-            "reputation_score": 0.95,
-            "verified": True
-        }
+        try:
+            response = await self.client.get(f"/identity/users/{user_id}")
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error fetching user profile: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error fetching user profile: {e}")
+            raise
 
     # ==================== Marketplace ====================
 
+    @retry_on_failure(max_retries=2, delay=0.5)
     async def find_supervisors(
         self,
         workflow_type: str,
@@ -356,26 +517,25 @@ class X402Client:
         """
         logger.info(f"Finding supervisors for {workflow_type}")
 
-        # Mock implementation
-        supervisors = [
-            {
-                "supervisor_id": "supervisor_1",
-                "reputation": 0.95,
-                "response_time_avg": 120,  # seconds
-                "approval_quality": 0.92,
-                "available": True
-            },
-            {
-                "supervisor_id": "supervisor_2",
-                "reputation": 0.88,
-                "response_time_avg": 180,
-                "approval_quality": 0.89,
-                "available": True
-            }
-        ]
+        try:
+            response = await self.client.get(
+                "/marketplace/supervisors",
+                params={
+                    "workflow_type": workflow_type,
+                    "min_reputation": min_reputation
+                }
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result.get("supervisors", [])
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error finding supervisors: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error finding supervisors: {e}")
+            raise
 
-        return supervisors
-
+    @retry_on_failure(max_retries=2, delay=0.5)
     async def request_supervisor(
         self,
         supervisor_id: str,
@@ -383,7 +543,23 @@ class X402Client:
     ) -> bool:
         """Request a specific supervisor for a workflow"""
         logger.info(f"Requesting supervisor {supervisor_id} for workflow {workflow_id}")
-        return True
+        
+        try:
+            response = await self.client.post(
+                "/marketplace/supervisors/request",
+                json={
+                    "supervisor_id": supervisor_id,
+                    "workflow_id": workflow_id
+                }
+            )
+            response.raise_for_status()
+            return True
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error requesting supervisor: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error requesting supervisor: {e}")
+            raise
 
 
 class X402Integration:
