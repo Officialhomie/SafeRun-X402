@@ -10,6 +10,7 @@ from datetime import datetime
 from loguru import logger
 
 from saferun.core.state_machine.models import ExecutionState
+from saferun.config import settings
 
 
 class ExecutorAgent:
@@ -36,6 +37,21 @@ class ExecutorAgent:
             "execution_time": 0
         }
         self.checkpoint_callback: Optional[Callable] = None
+        
+        # Initialize Claude API client - required for real execution
+        if not settings.anthropic_api_key:
+            raise ValueError(
+                "ANTHROPIC_API_KEY is required for ExecutorAgent. "
+                "Please set it in your environment or config."
+            )
+        
+        try:
+            from anthropic import Anthropic
+            self.claude_client = Anthropic(api_key=settings.anthropic_api_key)
+            logger.info(f"ExecutorAgent {agent_id} initialized with Claude API")
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize Claude client: {e}") from e
+        
         logger.info(f"ExecutorAgent {agent_id} initialized")
 
     def set_checkpoint_callback(self, callback: Callable):
@@ -156,40 +172,134 @@ class ExecutorAgent:
         task_description: str,
         task_parameters: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Create execution plan for the task"""
-        # Mock implementation
-        plan = {
-            "summary": f"Execute {task_description}",
-            "steps": [
-                {
-                    "id": 1,
-                    "description": "Gather information",
-                    "critical": False
-                },
-                {
-                    "id": 2,
-                    "description": "Process data",
-                    "critical": True
-                },
-                {
-                    "id": 3,
-                    "description": "Generate output",
-                    "critical": False
-                }
-            ]
-        }
-        return plan
+        """Create execution plan for the task using Claude API"""
+        if self.claude_client:
+            try:
+                # Use Claude to create an execution plan
+                prompt = f"""You are an AI agent executor. Create a detailed execution plan for the following task.
+
+Task Description: {task_description}
+Task Parameters: {task_parameters}
+
+Please create a structured plan with:
+1. A brief summary of the approach
+2. A list of steps to execute, each with:
+   - An ID number
+   - A clear description
+   - Whether the step is critical (requires human approval)
+
+Return your response as a JSON object with this structure:
+{{
+    "summary": "Brief summary of the execution approach",
+    "steps": [
+        {{
+            "id": 1,
+            "description": "Step description",
+            "critical": true/false
+        }}
+    ]
+}}"""
+
+                response = self.claude_client.messages.create(
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=2000,
+                    messages=[{
+                        "role": "user",
+                        "content": prompt
+                    }]
+                )
+                
+                # Parse the response
+                content = response.content[0].text
+                self.resource_consumption["tokens_used"] += response.usage.input_tokens + response.usage.output_tokens
+                
+                # Try to extract JSON from the response
+                import json
+                import re
+                
+                # Look for JSON in the response
+                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                if json_match:
+                    plan = json.loads(json_match.group())
+                    logger.info(f"Generated execution plan with {len(plan.get('steps', []))} steps")
+                    return plan
+                else:
+                    # If JSON parsing fails, raise an error - we need structured response
+                    raise ValueError(
+                        f"Claude API response could not be parsed as JSON. "
+                        f"Response: {content[:200]}"
+                    )
+                    
+            except Exception as e:
+                logger.error(f"Error calling Claude API for planning: {e}")
+                raise RuntimeError(f"Failed to generate execution plan: {e}") from e
 
     async def _make_api_call(self, step: Dict[str, Any]) -> Dict[str, Any]:
-        """Simulate making an API call"""
+        """Execute a step using Claude API"""
         call_record = {
             "call_id": f"call_{len(self.api_call_history)}",
             "timestamp": datetime.utcnow().isoformat(),
             "step_id": step["id"],
             "description": step["description"],
             "has_side_effects": step.get("critical", False),
-            "result": {"status": "success", "data": f"Result for step {step['id']}"}
         }
+        
+        if self.claude_client:
+            try:
+                # Use Claude to execute the step
+                prompt = f"""You are executing a workflow step. Here's the step to execute:
+
+Step ID: {step['id']}
+Description: {step['description']}
+Critical: {step.get('critical', False)}
+
+Current Context:
+- Task: {self.execution_context.get('task', 'N/A')}
+- Parameters: {self.execution_context.get('parameters', {})}
+- Previous outputs: {list(self.intermediate_outputs.keys())}
+
+Execute this step and provide:
+1. A status (success, partial, or error)
+2. The data or result produced
+3. Any important notes or warnings
+
+Return your response as a JSON object:
+{{
+    "status": "success|partial|error",
+    "data": "The actual result or output",
+    "notes": "Any important information"
+}}"""
+
+                response = self.claude_client.messages.create(
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=2000,
+                    messages=[{
+                        "role": "user",
+                        "content": prompt
+                    }]
+                )
+                
+                content = response.content[0].text
+                self.resource_consumption["tokens_used"] += response.usage.input_tokens + response.usage.output_tokens
+                
+                # Parse the response
+                import json
+                import re
+                
+                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                if json_match:
+                    result = json.loads(json_match.group())
+                    call_record["result"] = result
+                else:
+                    # If JSON parsing fails, raise an error - we need structured response
+                    raise ValueError(
+                        f"Claude API response could not be parsed as JSON for step {step['id']}. "
+                        f"Response: {content[:200]}"
+                    )
+                    
+            except Exception as e:
+                logger.error(f"Error calling Claude API for step execution: {e}")
+                raise RuntimeError(f"Failed to execute step {step['id']}: {e}") from e
 
         self.api_call_history.append(call_record)
         self.resource_consumption["api_calls"] += 1
