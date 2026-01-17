@@ -6,8 +6,10 @@ FastAPI application that provides REST API for supervised workflow execution.
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
+from pathlib import Path
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 from loguru import logger
@@ -48,6 +50,10 @@ orchestrator = WorkflowOrchestrator()
 checkpoint_manager = CheckpointManager()
 x402 = X402Integration()
 
+# Templates setup
+BASE_DIR = Path(__file__).resolve().parent.parent
+templates = Jinja2Templates(directory=str(BASE_DIR / "ui" / "templates"))
+
 # Active agents
 active_executors: Dict[str, ExecutorAgent] = {}
 active_monitors: Dict[str, MonitorAgent] = {}
@@ -72,6 +78,13 @@ class ApprovalDecisionRequest(BaseModel):
     modifications: Optional[Dict[str, Any]] = None
 
 # ==================== API Endpoints ====================
+
+@app.get("/approvals", response_class=HTMLResponse)
+async def approvals_dashboard():
+    """Serve the approval dashboard UI"""
+    approval_html_path = BASE_DIR / "ui" / "templates" / "approvals.html"
+    with open(approval_html_path, 'r') as f:
+        return HTMLResponse(content=f.read())
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -165,7 +178,25 @@ async def root():
         </div>
 
         <div class="card">
+            <h2>🎛️ Quick Actions</h2>
+            <p>
+                <a href="/approvals" style="display: inline-block; background: #667eea; color: white; padding: 15px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin: 10px 10px 10px 0;">
+                    Open Approval Dashboard →
+                </a>
+                <a href="/docs" style="display: inline-block; background: #764ba2; color: white; padding: 15px 30px; border-radius: 8px; text-decoration: none; font-weight: 600; margin: 10px;">
+                    View API Docs →
+                </a>
+            </p>
+        </div>
+
+        <div class="card">
             <h2>API Endpoints</h2>
+
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span>/approvals</span>
+                <p>Open the approval dashboard UI (Human Interface)</p>
+            </div>
 
             <div class="endpoint">
                 <span class="method post">POST</span>
