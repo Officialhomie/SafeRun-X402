@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SafeRun - Approval Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f7fa;
+            color: #333;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 40px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 600;
+        }
+
+        .header p {
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        .status-bar {
+            background: white;
+            border-radius: 12px;
+            padding: 20px 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-item {
+            text-align: center;
+        }
+
+        .status-item .label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-item .value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+            margin-top: 5px;
+        }
+
+        .approval-card {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            border-left: 4px solid #667eea;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .approval-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .approval-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .approval-meta {
+            display: flex;
+            gap: 15px;
+            font-size: 13px;
+            color: #666;
+        }
+
+        .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .badge.pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .section {
+            margin-bottom: 25px;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+
+        .section-content {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .list-item {
+            padding: 10px;
+            background: white;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            border-left: 3px solid #667eea;
+        }
+
+        .alert-box {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .alert-box.critical {
+            background: #f8d7da;
+            border-color: #dc3545;
+        }
+
+        .alert-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .decision-panel {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 25px;
+            margin-top: 25px;
+        }
+
+        .decision-buttons {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .btn-approve {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-approve:hover {
+            background: #218838;
+        }
+
+        .btn-modify {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .btn-modify:hover {
+            background: #e0a800;
+        }
+
+        .btn-reject {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-reject:hover {
+            background: #c82333;
+        }
+
+        .rationale-box {
+            margin-top: 15px;
+        }
+
+        .rationale-box label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #333;
+        }
+
+        .rationale-box textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 14px;
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .rationale-box textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .modifications-box {
+            margin-top: 15px;
+            display: none;
+        }
+
+        .modifications-box.visible {
+            display: block;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 80px 20px;
+            color: #999;
+        }
+
+        .empty-state svg {
+            width: 120px;
+            height: 120px;
+            margin-bottom: 20px;
+            opacity: 0.3;
+        }
+
+        .empty-state h2 {
+            font-size: 24px;
+            margin-bottom: 10px;
+            color: #666;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .success-message {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .success-message.show {
+            display: block;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        code {
+            background: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+        }
+
+        .json-display {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🛡️ SafeRun Approval Dashboard</h1>
+        <p>Review agent checkpoints and make decisions</p>
+    </div>
+
+    <div class="container">
+        <div id="successMessage" class="success-message"></div>
+
+        <div class="status-bar">
+            <div class="status-item">
+                <div class="label">Pending Approvals</div>
+                <div class="value" id="pendingCount">-</div>
+            </div>
+            <div class="status-item">
+                <div class="label">Auto Refresh</div>
+                <div class="value" style="font-size: 16px; margin-top: 10px;">
+                    <label style="cursor: pointer;">
+                        <input type="checkbox" id="autoRefresh" checked style="margin-right: 5px;">
+                        Every 5s
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div id="approvalsContainer">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Loading pending approvals...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let autoRefreshInterval;
+        let currentDecision = null;
+
+        // Load approvals on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadApprovals();
+            setupAutoRefresh();
+        });
+
+        // Auto refresh toggle
+        function setupAutoRefresh() {
+            const checkbox = document.getElementById('autoRefresh');
+
+            checkbox.addEventListener('change', function() {
+                if (this.checked) {
+                    startAutoRefresh();
+                } else {
+                    stopAutoRefresh();
+                }
+            });
+
+            // Start auto refresh initially
+            if (checkbox.checked) {
+                startAutoRefresh();
+            }
+        }
+
+        function startAutoRefresh() {
+            stopAutoRefresh(); // Clear any existing interval
+            autoRefreshInterval = setInterval(loadApprovals, 5000);
+        }
+
+        function stopAutoRefresh() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+            }
+        }
+
+        // Load pending approvals from API
+        async function loadApprovals() {
+            try {
+                const response = await fetch('/api/approvals/pending');
+                const data = await response.json();
+
+                document.getElementById('pendingCount').textContent = data.total || 0;
+
+                const container = document.getElementById('approvalsContainer');
+
+                if (data.pending_approvals && data.pending_approvals.length > 0) {
+                    container.innerHTML = data.pending_approvals.map(renderApprovalCard).join('');
+                } else {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <h2>All Clear!</h2>
+                            <p>No pending approvals at this time.</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Failed to load approvals:', error);
+                document.getElementById('approvalsContainer').innerHTML = `
+                    <div class="empty-state">
+                        <h2>Error Loading Approvals</h2>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        // Render an approval card
+        function renderApprovalCard(approval) {
+            const sections = approval.sections || [];
+
+            return `
+                <div class="approval-card" data-request-id="${approval.request_id}">
+                    <div class="approval-header">
+                        <div>
+                            <div class="approval-title">${escapeHtml(approval.summary || 'Approval Required')}</div>
+                            <div class="approval-meta">
+                                <div class="meta-item">
+                                    <span>📋</span>
+                                    <code>${approval.checkpoint_id || 'N/A'}</code>
+                                </div>
+                                <div class="meta-item">
+                                    <span>🔗</span>
+                                    <code>${approval.workflow_id || 'N/A'}</code>
+                                </div>
+                            </div>
+                        </div>
+                        <span class="badge pending">Pending</span>
+                    </div>
+
+                    ${sections.map(renderSection).join('')}
+
+                    <div class="decision-panel">
+                        <div class="decision-buttons">
+                            <button class="btn btn-approve" onclick="setDecision('${approval.request_id}', 'approved')">
+                                ✓ Approve
+                            </button>
+                            <button class="btn btn-modify" onclick="setDecision('${approval.request_id}', 'modified')">
+                                ✎ Modify
+                            </button>
+                            <button class="btn btn-reject" onclick="setDecision('${approval.request_id}', 'rejected')">
+                                ✗ Reject
+                            </button>
+                        </div>
+
+                        <div class="rationale-box">
+                            <label>Rationale (Required):</label>
+                            <textarea id="rationale-${approval.request_id}" placeholder="Explain your decision..."></textarea>
+                        </div>
+
+                        <div class="modifications-box" id="modifications-${approval.request_id}">
+                            <label>Modifications (JSON):</label>
+                            <textarea placeholder='{"key": "value"}'></textarea>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Render a section based on type
+        function renderSection(section) {
+            if (section.type === 'text') {
+                return `
+                    <div class="section">
+                        <div class="section-title">${section.title}</div>
+                        <div class="section-content">${escapeHtml(section.content)}</div>
+                    </div>
+                `;
+            } else if (section.type === 'list') {
+                const items = Array.isArray(section.content) ? section.content : [];
+                return `
+                    <div class="section">
+                        <div class="section-title">${section.title}</div>
+                        <div>
+                            ${items.map(item => `
+                                <div class="list-item">
+                                    ${typeof item === 'string' ? escapeHtml(item) : escapeHtml(item.description || JSON.stringify(item))}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            } else if (section.type === 'json') {
+                return `
+                    <div class="section">
+                        <div class="section-title">${section.title}</div>
+                        <div class="json-display">${JSON.stringify(section.content, null, 2)}</div>
+                    </div>
+                `;
+            } else if (section.type === 'alerts') {
+                const alerts = Array.isArray(section.content) ? section.content : [];
+                return `
+                    <div class="section">
+                        ${alerts.map(alert => `
+                            <div class="alert-box ${section.severity === 'critical' ? 'critical' : ''}">
+                                <div class="alert-title">⚠️ ${alert.type || 'Alert'}</div>
+                                <div>${escapeHtml(alert.details || JSON.stringify(alert))}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            }
+            return '';
+        }
+
+        // Set decision and show/hide modifications box
+        function setDecision(requestId, decision) {
+            currentDecision = { requestId, decision };
+
+            const modificationsBox = document.getElementById(`modifications-${requestId}`);
+            if (decision === 'modified') {
+                modificationsBox.classList.add('visible');
+            } else {
+                modificationsBox.classList.remove('visible');
+            }
+        }
+
+        // Submit approval decision
+        async function submitDecision(requestId, decision, rationale, modifications = null) {
+            try {
+                const payload = {
+                    request_id: requestId,
+                    decision: decision,
+                    rationale: rationale,
+                    approved_by: "human_supervisor_ui",
+                    modifications: modifications
+                };
+
+                const response = await fetch('/api/approvals/submit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+
+                // Show success message
+                showSuccess(`Decision ${decision} submitted successfully!`);
+
+                // Reload approvals
+                setTimeout(loadApprovals, 1000);
+
+            } catch (error) {
+                alert(`Failed to submit decision: ${error.message}`);
+            }
+        }
+
+        // Handle form submission via button clicks
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('btn-approve') ||
+                e.target.classList.contains('btn-modify') ||
+                e.target.classList.contains('btn-reject')) {
+
+                const card = e.target.closest('.approval-card');
+                const requestId = card.dataset.requestId;
+                const rationaleEl = document.getElementById(`rationale-${requestId}`);
+                const rationale = rationaleEl.value.trim();
+
+                if (!rationale) {
+                    alert('Please provide a rationale for your decision.');
+                    rationaleEl.focus();
+                    return;
+                }
+
+                let decision = 'approved';
+                let modifications = null;
+
+                if (e.target.classList.contains('btn-approve')) {
+                    decision = 'approved';
+                } else if (e.target.classList.contains('btn-modify')) {
+                    decision = 'modified';
+                    const modificationsEl = document.querySelector(`#modifications-${requestId} textarea`);
+                    const modificationsText = modificationsEl.value.trim();
+                    if (modificationsText) {
+                        try {
+                            modifications = JSON.parse(modificationsText);
+                        } catch (e) {
+                            alert('Invalid JSON in modifications field.');
+                            modificationsEl.focus();
+                            return;
+                        }
+                    }
+                } else if (e.target.classList.contains('btn-reject')) {
+                    decision = 'rejected';
+                }
+
+                submitDecision(requestId, decision, rationale, modifications);
+            }
+        });
+
+        // Show success message
+        function showSuccess(message) {
+            const el = document.getElementById('successMessage');
+            el.textContent = message;
+            el.classList.add('show');
+            setTimeout(() => {
+                el.classList.remove('show');
+            }, 5000);
+        }
+
+        // Utility function to escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
