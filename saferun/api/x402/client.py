@@ -16,6 +16,7 @@ import asyncio
 from functools import wraps
 
 from saferun.config import settings
+from saferun.core.artifacts.store import ArtifactStore
 
 
 def retry_on_failure(max_retries: int = 3, delay: float = 1.0, backoff: float = 2.0):
@@ -140,7 +141,6 @@ class X402Client:
             logger.error(f"Failed to create job: {e}")
             raise
 
-    @retry_on_failure(max_retries=2, delay=0.5)
     @retry_on_failure(max_retries=2, delay=0.5)
     async def get_job(self, job_id: str) -> Dict[str, Any]:
         """Retrieve job details"""
@@ -571,6 +571,7 @@ class X402Integration:
 
     def __init__(self):
         self.client = X402Client()
+        self.artifacts = ArtifactStore(base_dir="saferun_artifacts")
         logger.info("X402Integration initialized")
 
     async def setup_supervised_workflow(
@@ -596,42 +597,20 @@ class X402Integration:
         """
         logger.info(f"Setting up supervised workflow {workflow_id}")
 
-        # Find supervisor if not provided
+        # Facilitators (e.g. pay.openfacilitator.io) do not provide "jobs" or "escrow"
+        # primitives. SafeRun tracks workflow/job handles locally, and uses x402 only
+        # for payment verification/settlement where applicable.
+        from uuid import uuid4
+
         if not supervisor_id:
-            supervisors = await self.client.find_supervisors(
-                workflow_type=workflow_config.get("type", "general")
-            )
-            if supervisors:
-                supervisor_id = supervisors[0]["supervisor_id"]
-            else:
-                raise Exception("No supervisors available")
-
-        # Create main job
-        job = await self.client.create_job(
-            job_type="supervised_workflow",
-            job_data={
-                "workflow_id": workflow_id,
-                "config": workflow_config,
-                "supervisor_id": supervisor_id
-            },
-            escrow_amount=escrow_amount,
-            executor_id=executor_id
-        )
-
-        # Lock escrow
-        escrow = await self.client.lock_escrow(
-            workflow_id=workflow_id,
-            amount=escrow_amount,
-            poster_id=poster_id,
-            executor_id=executor_id
-        )
+            supervisor_id = workflow_config.get("supervisor_id") or "default_supervisor"
 
         setup = {
             "workflow_id": workflow_id,
-            "job_id": job["job_id"],
-            "escrow_id": escrow["escrow_id"],
+            "job_id": f"job_{uuid4()}",
+            "escrow_id": None,
             "supervisor_id": supervisor_id,
-            "status": "ready"
+            "status": "ready",
         }
 
         logger.info(f"Supervised workflow setup complete: {workflow_id}")
@@ -649,15 +628,11 @@ class X402Integration:
         Returns:
             Artifact URI
         """
-        artifact = await self.client.create_artifact(
+        artifact = self.artifacts.create(
             artifact_type="checkpoint_state",
             content=checkpoint_data,
-            metadata={
-                "checkpoint_id": checkpoint_id,
-                **metadata
-            }
+            metadata={"checkpoint_id": checkpoint_id, **metadata},
         )
-
         return artifact["uri"]
 
     async def settle_workflow(
@@ -684,23 +659,10 @@ class X402Integration:
             escrow_amount=escrow_amount
         )
 
-        # Execute payment splits
-        splits = [
-            {
-                "recipient_id": executor_id,
-                "amount": settlement["splits"][0]["amount"],
-                "reason": "execution"
-            },
-            {
-                "recipient_id": supervisor_id,
-                "amount": settlement["splits"][1]["amount"],
-                "reason": "supervision"
-            }
-        ]
-
-        await self.client.split_payment(escrow_id, splits)
-
-        logger.info(f"Workflow {workflow_id} settled successfully")
+        # Note: x402 facilitators do not implement escrow splitting. We return the
+        # computed settlement plan so callers can execute payment via their own
+        # payment flow (e.g. x402 /settle with client-provided paymentPayload).
+        logger.info(f"Workflow {workflow_id} settlement plan computed successfully")
         return settlement
 
     async def close(self):
