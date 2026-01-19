@@ -8,8 +8,17 @@ and maintains execution context.
 from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime
 from loguru import logger
+import json
 
 from saferun.core.state_machine.models import ExecutionState
+
+# Try to import Anthropic, but don't fail if not available
+try:
+    from anthropic import Anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+    logger.warning("Anthropic library not available. Using mock execution.")
 from saferun.config import settings
 
 
