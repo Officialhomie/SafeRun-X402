@@ -5,7 +5,7 @@ This agent presents checkpoint state to humans for approval,
 collects decisions, and routes them back to the orchestrator.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 from loguru import logger
 
