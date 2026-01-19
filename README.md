@@ -473,7 +473,7 @@ INITIALIZED → EXECUTING → AWAITING_APPROVAL → EXECUTING → SETTLING → C
 
 ### Prerequisites
 
-- Python 3.9 or higher
+- Python 3.11 or 3.12 (recommended). Python 3.13 is not supported by pinned deps.
 - pip (Python package manager)
 - Git
 
@@ -491,14 +491,13 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Configure environment (optional - demo works without API keys)
+# Configure environment (required)
 cp .env.example .env
-# Edit .env to add API keys if you have them:
+# Edit .env to add API keys:
 # X402_API_KEY=your_x402_key
+# X402_API_URL=https://<your-real-x402-api-base-url>
 # ANTHROPIC_API_KEY=your_anthropic_key
 ```
-
-**Note**: The demo works without API keys! Real x402 integration is mocked for development.
 
 ---
 
@@ -993,11 +992,11 @@ async def workflow_with_rollback():
 #### Environment Variables
 
 ```bash
-# Required
+# Required (SafeRun will fail fast if missing)
 X402_API_KEY=your_x402_api_key
-X402_API_URL=https://api.x402.io
+X402_API_URL=https://<your-real-x402-api-base-url>
 
-# Optional (for Claude-powered agents)
+# Required (ExecutorAgent uses Claude)
 ANTHROPIC_API_KEY=your_anthropic_key
 
 # Optional (for OpenAI-powered agents)
@@ -1251,8 +1250,10 @@ class SafeRunAutoGPTWrapper:
 ```python
 from saferun.core.state_machine.orchestrator import WorkflowOrchestrator
 from saferun.core.state_machine.models import WorkflowConfig, CheckpointConfig
+from saferun.api.x402.client import X402Integration
 
-orchestrator = WorkflowOrchestrator()
+x402 = X402Integration()
+orchestrator = WorkflowOrchestrator(x402_integration=x402)
 
 # Define workflow with checkpoints
 config = WorkflowConfig(
@@ -1865,7 +1866,7 @@ Current test coverage includes:
 - ✅ **x402 integration layer**
   - All 5 primitives tested
   - Error handling and retry logic
-  - Graceful fallbacks
+  - Fail-fast behavior
 
 ### Test Files
 
@@ -1926,10 +1927,7 @@ curl -X POST http://localhost:8000/api/approvals/submit \
 **Solution:**
 ```bash
 # Check x402 API is accessible
-curl https://api.x402.io/health
-
-# Or run in graceful fallback mode (checkpoints work, just not persisted)
-# SafeRun automatically falls back to in-memory storage if x402 is unavailable
+curl "$X402_API_URL/health"
 ```
 
 #### Issue: "ModuleNotFoundError: No module named 'anthropic'"
