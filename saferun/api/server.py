@@ -13,6 +13,7 @@ from pathlib import Path
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 from loguru import logger
+import asyncio
 
 from saferun.config import settings
 from saferun.core.state_machine.orchestrator import WorkflowOrchestrator
@@ -58,6 +59,112 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "ui" / "templates"))
 active_executors: Dict[str, ExecutorAgent] = {}
 active_monitors: Dict[str, MonitorAgent] = {}
 active_supervisors: Dict[str, SupervisorAgent] = {}
+
+# Background execution + approval coordination
+workflow_x402_setup: Dict[str, Dict[str, Any]] = {}
+workflow_tasks: Dict[str, asyncio.Task] = {}
+approval_waiters: Dict[str, asyncio.Future] = {}
+
+
+def _approval_result_from_decision(decision: ApprovalDecision, modifications: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if decision == ApprovalDecision.APPROVED:
+        return {"approved": True}
+    if decision == ApprovalDecision.MODIFIED:
+        return {"approved": True, "modifications": modifications or {}}
+    return {"approved": False}
+
+
+async def _run_workflow_execution(workflow_id: str, task_description: str, task_parameters: Dict[str, Any]) -> None:
+    """
+    Run a workflow end-to-end:
+    - Executor runs and emits checkpoints
+    - Server creates approval requests visible in /approvals
+    - Human approval resumes execution
+    - Settlement occurs via x402
+    """
+    executor = active_executors[workflow_id]
+    monitor = active_monitors[workflow_id]
+    supervisor = active_supervisors[workflow_id]
+    execution = orchestrator.get_workflow(workflow_id)
+    if not execution:
+        raise RuntimeError(f"Workflow {workflow_id} not found")
+
+    async def checkpoint_callback(checkpoint_id: str, state, summary: str) -> Dict[str, Any]:
+        # Map emitted checkpoints to configured checkpoints sequentially
+        wf = orchestrator.get_workflow(workflow_id)
+        if not wf:
+            raise RuntimeError(f"Workflow {workflow_id} not found")
+        if wf.current_checkpoint_index >= len(wf.config.checkpoints):
+            raise RuntimeError("Executor emitted more checkpoints than configured")
+
+        checkpoint_cfg = wf.config.checkpoints[wf.current_checkpoint_index]
+
+        # Monitor execution and attach report to the human-facing request
+        monitor_report = await monitor.monitor_execution(state, checkpoint_cfg)
+
+        # Store snapshot (and x402 artifact) using the configured checkpoint_id
+        state_to_store = state.model_copy(update={"checkpoint_id": checkpoint_cfg.checkpoint_id})
+        snapshot = await orchestrator.create_checkpoint(workflow_id, state_to_store)
+
+        # Create orchestrator approval request and align request_id for UI
+        orch_req = orchestrator.request_approval(
+            workflow_id=workflow_id,
+            snapshot_id=snapshot.snapshot_id,
+            summary=summary,
+            context={
+                "checkpoint_name": checkpoint_cfg.name,
+                "checkpoint_description": checkpoint_cfg.description,
+                "monitoring": monitor_report,
+            },
+        )
+        if not orch_req:
+            raise RuntimeError("Failed to create approval request")
+
+        supervisor.create_approval_request(
+            workflow_id=workflow_id,
+            checkpoint_id=checkpoint_cfg.checkpoint_id,
+            snapshot_id=snapshot.snapshot_id,
+            execution_state=state_to_store,
+            monitoring_report=monitor_report,
+            request_id=orch_req.request_id,
+        )
+
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        approval_waiters[orch_req.request_id] = future
+        try:
+            return await asyncio.wait_for(future, timeout=checkpoint_cfg.timeout_seconds)
+        finally:
+            approval_waiters.pop(orch_req.request_id, None)
+
+    executor.set_checkpoint_callback(checkpoint_callback)
+
+    try:
+        result = await executor.execute_task(task_description=task_description, task_parameters=task_parameters)
+
+        orchestrator.settle_workflow(workflow_id, final_state=result)
+
+        # Settlement plan (facilitator-based x402 does not provide escrow splitting)
+        setup = workflow_x402_setup.get(workflow_id) or {}
+        supervisor_id = setup.get("supervisor_id") or execution.config.supervisor_id or "default_supervisor"
+        await x402.settle_workflow(
+            workflow_id=workflow_id,
+            escrow_id=setup.get("escrow_id") or "n/a",
+            escrow_amount=execution.config.escrow_amount,
+            completion_percentage=1.0,
+            executor_id=execution.config.executor_id,
+            supervisor_id=supervisor_id,
+        )
+
+        orchestrator.complete_workflow(workflow_id)
+        logger.info(f"Workflow {workflow_id} completed successfully")
+
+    except asyncio.TimeoutError as e:
+        orchestrator.fail_workflow(workflow_id, f"Approval timed out: {e}")
+        raise
+    except Exception as e:
+        orchestrator.fail_workflow(workflow_id, str(e))
+        raise
 
 # ==================== Pydantic Models ====================
 
@@ -303,9 +410,19 @@ async def create_workflow(request: CreateWorkflowRequest):
         active_executors[config.workflow_id] = executor
         active_monitors[config.workflow_id] = monitor
         active_supervisors[config.workflow_id] = supervisor
+        workflow_x402_setup[config.workflow_id] = x402_setup
 
         # Start execution
         orchestrator.start_execution(config.workflow_id)
+
+        # Kick off background execution (creates approvals as checkpoints are reached)
+        workflow_tasks[config.workflow_id] = asyncio.create_task(
+            _run_workflow_execution(
+                workflow_id=config.workflow_id,
+                task_description=request.description or request.name,
+                task_parameters={"workflow_name": request.name},
+            )
+        )
 
         return {
             "workflow_id": config.workflow_id,
@@ -407,6 +524,11 @@ async def submit_approval(request: ApprovalDecisionRequest):
         # Route to orchestrator
         orchestrator.submit_approval(workflow_id, response)
 
+        # Resume any waiting executor checkpoint
+        waiter = approval_waiters.get(request.request_id)
+        if waiter and not waiter.done():
+            waiter.set_result(_approval_result_from_decision(decision_enum, request.modifications))
+
         # Get updated workflow status
         workflow = orchestrator.get_workflow(workflow_id)
 
@@ -453,6 +575,14 @@ async def get_stats():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up on shutdown"""
+    # Cancel background tasks
+    for task in list(workflow_tasks.values()):
+        if not task.done():
+            task.cancel()
+    # Unblock any waiters
+    for fut in list(approval_waiters.values()):
+        if not fut.done():
+            fut.cancel()
     await x402.close()
     logger.info("SafeRun API server shutting down")
 
