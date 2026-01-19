@@ -16,7 +16,7 @@ class WorkflowOrchestrator:
     rollbacks, and settlement.
     """
 
-    def __init__(self, x402_integration=None):
+    def __init__(self, x402_integration):
         self.active_workflows: Dict[str, WorkflowExecution] = {}
         self.x402_integration = x402_integration
         self.state_capture = StateCapture()
@@ -86,29 +86,26 @@ class WorkflowOrchestrator:
             approval_required=checkpoint_config.requires_approval
         )
 
-        # Store checkpoint as x402 artifact
-        if self.x402_integration:
-            try:
-                # Serialize the execution state
-                serialized_state = self.state_capture.serialize_state(execution_state)
-                
-                # Store as x402 artifact
-                artifact_uri = await self.x402_integration.store_checkpoint_artifact(
-                    checkpoint_id=snapshot.checkpoint_id,
-                    checkpoint_data=serialized_state,
-                    metadata={
-                        "workflow_id": workflow_id,
-                        "snapshot_id": snapshot.snapshot_id,
-                        "checkpoint_name": checkpoint_config.name,
-                        "approval_required": checkpoint_config.requires_approval
-                    }
-                )
-                
-                snapshot.artifact_uri = artifact_uri
-                logger.info(f"Checkpoint {snapshot.snapshot_id} stored as x402 artifact: {artifact_uri}")
-            except Exception as e:
-                logger.error(f"Failed to store checkpoint as x402 artifact: {e}")
-                # Continue without artifact storage - checkpoint still created locally
+        if not self.x402_integration:
+            raise RuntimeError("x402 integration is required to create checkpoints (artifact storage is mandatory).")
+
+        # Serialize and store checkpoint as x402 artifact (mandatory)
+        serialized_state = self.state_capture.serialize_state(execution_state)
+        artifact_uri = await self.x402_integration.store_checkpoint_artifact(
+            checkpoint_id=snapshot.checkpoint_id,
+            checkpoint_data=serialized_state,
+            metadata={
+                "workflow_id": workflow_id,
+                "snapshot_id": snapshot.snapshot_id,
+                "checkpoint_name": checkpoint_config.name,
+                "approval_required": checkpoint_config.requires_approval,
+            },
+        )
+        if not artifact_uri:
+            raise RuntimeError("x402 artifact storage returned empty artifact_uri")
+
+        snapshot.artifact_uri = artifact_uri
+        logger.info(f"Checkpoint {snapshot.snapshot_id} stored as x402 artifact: {artifact_uri}")
 
         workflow.snapshots.append(snapshot)
         logger.info(f"Checkpoint {snapshot.snapshot_id} created for workflow {workflow_id}")
