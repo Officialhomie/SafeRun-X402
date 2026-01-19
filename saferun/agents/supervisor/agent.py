@@ -32,6 +32,7 @@ class SupervisorAgent:
         self.supervisor_id = supervisor_id
         self.pending_approvals: Dict[str, ApprovalRequest] = {}
         self.approval_history: List[ApprovalResponse] = []
+        self.response_times_sec: List[float] = []
         logger.info(f"SupervisorAgent {supervisor_id} initialized")
 
     def create_approval_request(
@@ -40,7 +41,8 @@ class SupervisorAgent:
         checkpoint_id: str,
         snapshot_id: str,
         execution_state: ExecutionState,
-        monitoring_report: Optional[Dict[str, Any]] = None
+        monitoring_report: Optional[Dict[str, Any]] = None,
+        request_id: Optional[str] = None
     ) -> ApprovalRequest:
         """
         Create an approval request for human review.
@@ -66,13 +68,17 @@ class SupervisorAgent:
         # Package context for decision
         context = self._package_context(execution_state, monitoring_report)
 
-        request = ApprovalRequest(
-            workflow_id=workflow_id,
-            checkpoint_id=checkpoint_id,
-            snapshot_id=snapshot_id,
-            summary=summary,
-            context=context
-        )
+        request_kwargs = {
+            "workflow_id": workflow_id,
+            "checkpoint_id": checkpoint_id,
+            "snapshot_id": snapshot_id,
+            "summary": summary,
+            "context": context,
+        }
+        if request_id is not None:
+            request_kwargs["request_id"] = request_id
+
+        request = ApprovalRequest(**request_kwargs)
 
         self.pending_approvals[request.request_id] = request
 
@@ -284,6 +290,7 @@ class SupervisorAgent:
         if request_id not in self.pending_approvals:
             raise ValueError(f"Request {request_id} not found")
 
+        request = self.pending_approvals[request_id]
         response = ApprovalResponse(
             request_id=request_id,
             decision=decision,
@@ -291,6 +298,13 @@ class SupervisorAgent:
             modifications=modifications,
             approved_by=approved_by
         )
+
+        # Track response latency
+        try:
+            self.response_times_sec.append((response.approved_at - request.created_at).total_seconds())
+        except Exception:
+            # If clocks/fields are unexpected, don't block decision submission
+            pass
 
         # Move from pending to history
         del self.pending_approvals[request_id]
@@ -341,6 +355,6 @@ class SupervisorAgent:
 
     def _calculate_avg_response_time(self) -> float:
         """Calculate average time to respond to approvals"""
-        # Mock implementation
-        # In real system, would track request creation time vs response time
-        return 120.0  # seconds
+        if not self.response_times_sec:
+            return 0.0
+        return sum(self.response_times_sec) / len(self.response_times_sec)
