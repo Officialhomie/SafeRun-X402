@@ -17,6 +17,7 @@ from saferun.core.state_machine.models import (
     ApprovalResponse,
     ApprovalDecision
 )
+from saferun.api.x402.client import X402Integration
 from saferun.agents.executor.agent import ExecutorAgent
 from saferun.agents.monitor.agent import MonitorAgent
 from saferun.agents.supervisor.agent import SupervisorAgent
@@ -36,7 +37,8 @@ async def demo_financial_trade_execution():
     print("📊 Context: Automated trading agent managing a $5M portfolio")
     print("🎯 Task: Execute trade based on market analysis\n")
 
-    orchestrator = WorkflowOrchestrator()
+    x402 = X402Integration()
+    orchestrator = WorkflowOrchestrator(x402_integration=x402)
 
     config = WorkflowConfig(
         name="Automated Trade Execution",
@@ -195,6 +197,7 @@ async def demo_financial_trade_execution():
     )
 
     orchestrator.submit_approval(workflow_id, response)
+    await x402.close()
 
     print("🤖 Trading Agent: Modifications received and applied")
     print("✓ Updated trade: SELL 5,000 shares (50% position)")
@@ -243,7 +246,8 @@ async def demo_code_deployment_prevention():
     print("⚙️  Context: DevOps AI agent managing production deployments")
     print("🎯 Task: Deploy new microservice version to production\n")
 
-    orchestrator = WorkflowOrchestrator()
+    x402 = X402Integration()
+    orchestrator = WorkflowOrchestrator(x402_integration=x402)
 
     config = WorkflowConfig(
         name="Production Deployment",
@@ -401,6 +405,7 @@ async def demo_code_deployment_prevention():
     )
 
     orchestrator.submit_approval(workflow_id, response)
+    await x402.close()
 
     print("🔄 SafeRun: Deployment REJECTED - initiating rollback...")
     await asyncio.sleep(1)
@@ -440,7 +445,8 @@ async def demo_research_workflow_quality():
     print("📚 Context: Legal AI assistant researching case law precedents")
     print("🎯 Task: Find relevant precedents for upcoming trial\n")
 
-    orchestrator = WorkflowOrchestrator()
+    x402 = X402Integration()
+    orchestrator = WorkflowOrchestrator(x402_integration=x402)
 
     config = WorkflowConfig(
         name="Legal Research",
@@ -582,6 +588,7 @@ async def demo_research_workflow_quality():
     )
 
     orchestrator.submit_approval(workflow_id, response)
+    await x402.close()
 
     print("✅ FINAL RESEARCH (After Human Review):")
     print("   1. Martinez v. Brown (2021) - CA Supreme Court ⭐ PRIMARY")
