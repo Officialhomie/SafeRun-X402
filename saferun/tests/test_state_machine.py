@@ -1,13 +1,26 @@
 import pytest
+import os
 from saferun.core.state_machine.models import (
     WorkflowConfig, CheckpointConfig, WorkflowState,
     ExecutionState, ApprovalResponse, ApprovalDecision
 )
 from saferun.core.state_machine.orchestrator import WorkflowOrchestrator
+from saferun.api.x402.client import X402Integration
+
+
+def _require_x402():
+    if (
+        not os.getenv("X402_API_KEY")
+        or not os.getenv("X402_API_URL")
+        or os.getenv("X402_API_URL") == "https://api.x402.io"
+    ):
+        pytest.skip("Real x402 credentials not configured (X402_API_KEY/X402_API_URL).")
 
 def test_workflow_initialization():
     """Test that workflows initialize correctly"""
-    orchestrator = WorkflowOrchestrator()
+    _require_x402()
+    x402 = X402Integration()
+    orchestrator = WorkflowOrchestrator(x402_integration=x402)
 
     config = WorkflowConfig(
         name="Test Workflow",
@@ -30,9 +43,12 @@ def test_workflow_initialization():
     assert execution.workflow_id == config.workflow_id
     assert len(execution.snapshots) == 0
 
-def test_execution_flow():
+@pytest.mark.asyncio
+async def test_execution_flow():
     """Test basic execution flow through states"""
-    orchestrator = WorkflowOrchestrator()
+    _require_x402()
+    x402 = X402Integration()
+    orchestrator = WorkflowOrchestrator(x402_integration=x402)
 
     config = WorkflowConfig(
         name="Test Workflow",
@@ -61,7 +77,7 @@ def test_execution_flow():
         checkpoint_id=config.checkpoints[0].checkpoint_id,
         agent_memory={"key": "value"}
     )
-    snapshot = orchestrator.create_checkpoint(workflow_id, exec_state)
+    snapshot = await orchestrator.create_checkpoint(workflow_id, exec_state)
     assert snapshot is not None
 
     # Request approval
@@ -75,9 +91,12 @@ def test_execution_flow():
     execution = orchestrator.get_workflow(workflow_id)
     assert execution.current_state == WorkflowState.AWAITING_APPROVAL
 
-def test_approval_flow():
+@pytest.mark.asyncio
+async def test_approval_flow():
     """Test approval decision handling"""
-    orchestrator = WorkflowOrchestrator()
+    _require_x402()
+    x402 = X402Integration()
+    orchestrator = WorkflowOrchestrator(x402_integration=x402)
 
     config = WorkflowConfig(
         name="Approval Test",
@@ -97,7 +116,7 @@ def test_approval_flow():
     orchestrator.start_execution(workflow_id)
 
     exec_state = ExecutionState(checkpoint_id=config.checkpoints[0].checkpoint_id)
-    snapshot = orchestrator.create_checkpoint(workflow_id, exec_state)
+    snapshot = await orchestrator.create_checkpoint(workflow_id, exec_state)
     request = orchestrator.request_approval(
         workflow_id, snapshot.snapshot_id, "Test", {}
     )
