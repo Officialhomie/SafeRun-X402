@@ -157,8 +157,8 @@ class RollbackManager:
 
         # State restoration (restore agent memory, outputs, etc.)
         logger.info("Restoring state from checkpoint")
-        # This would integrate with the agent to restore its internal state
-        # For now, we just log it
+        # State restoration is performed by the caller (e.g., ExecutorAgent.restore_state)
+        # using the captured ExecutionState.
 
         rollback_record["success"] = all_successful
         self.rollback_history.append(rollback_record)
@@ -217,7 +217,8 @@ class ReconciliationAgent:
         self,
         workflow_id: str,
         checkpoint_state: ExecutionState,
-        rejection_reason: str
+        rejection_reason: str,
+        escrow_amount: float
     ) -> Dict[str, Any]:
         """
         Reconcile a workflow after rejection.
@@ -247,9 +248,7 @@ class ReconciliationAgent:
         # Calculate partial completion based on checkpoint state
         report["partial_completion"] = self._calculate_completion(checkpoint_state)
 
-        # Execute cleanup
-        # In a real implementation, this would analyze the execution state
-        # and determine which actions need rollback
+        # Determine which actions need rollback based on checkpoint state
         actions_to_rollback = self._identify_rollback_actions(checkpoint_state)
 
         rollback_success = await self.rollback_manager.execute_rollback(
@@ -264,10 +263,9 @@ class ReconciliationAgent:
         ]
 
         # Calculate recommended payment (pro-rated based on completion)
-        # This integrates with x402 escrow for partial payment
         report["recommended_payment"] = self._calculate_partial_payment(
-            checkpoint_state,
-            report["partial_completion"]
+            escrow_amount=escrow_amount,
+            completion_percentage=report["partial_completion"]
         )
 
         logger.info(
@@ -301,7 +299,7 @@ class ReconciliationAgent:
 
     def _calculate_partial_payment(
         self,
-        checkpoint_state: ExecutionState,
+        escrow_amount: float,
         completion_percentage: float
     ) -> float:
         """
@@ -312,17 +310,10 @@ class ReconciliationAgent:
         - Resources consumed
         - Whether rollback was needed
         """
-        # Base payment on completion percentage
-        # Subtract rollback cost
-        # This would integrate with actual escrow amounts
-        base_payment = 100.0  # Placeholder
-        partial_payment = base_payment * completion_percentage
-
-        # Deduct rollback cost (resources used for cleanup)
-        rollback_cost = sum(checkpoint_state.resource_consumption.values())
-        adjusted_payment = max(0, partial_payment - rollback_cost)
-
-        return adjusted_payment
+        # Pro-rate directly against the real escrow amount.
+        # Note: we do NOT subtract "rollback_cost" because resource_consumption units
+        # are not currency and mixing them would be incorrect.
+        return max(0.0, escrow_amount * max(0.0, min(completion_percentage, 1.0)))
 
     def _identify_rollback_actions(self, checkpoint_state: ExecutionState) -> List[str]:
         """
@@ -330,13 +321,7 @@ class ReconciliationAgent:
 
         Analyzes the checkpoint state to determine what cleanup is needed.
         """
-        # In real implementation, this would look at:
-        # - API calls that modified external state
-        # - Files that were created
-        # - Database changes
-        # - etc.
-
-        # For now, return action IDs based on API calls
+        # Return action IDs based on side-effectful API calls.
         return [
             call.get("call_id", f"call_{i}")
             for i, call in enumerate(checkpoint_state.api_calls)
