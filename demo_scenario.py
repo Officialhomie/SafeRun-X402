@@ -18,6 +18,7 @@ from saferun.core.state_machine.models import (
     ApprovalResponse,
     ApprovalDecision
 )
+from saferun.api.x402.client import X402Integration
 from saferun.agents.executor.agent import ExecutorAgent
 from saferun.agents.monitor.agent import MonitorAgent
 from saferun.agents.supervisor.agent import SupervisorAgent
@@ -56,8 +57,9 @@ async def demo_supervised_scenario():
     print("SCENARIO 2: WITH SAFERUN (The Success)")
     print("=" * 70 + "\n")
 
-    # Initialize SafeRun components
-    orchestrator = WorkflowOrchestrator()
+    # Initialize SafeRun components (real x402 integration required)
+    x402 = X402Integration()
+    orchestrator = WorkflowOrchestrator(x402_integration=x402)
 
     # Create workflow with checkpoints
     config = WorkflowConfig(
@@ -116,7 +118,7 @@ async def demo_supervised_scenario():
         ]
     )
 
-    snapshot = orchestrator.create_checkpoint(workflow_id, execution_state)
+    snapshot = await orchestrator.create_checkpoint(workflow_id, execution_state)
 
     # Request approval
     request = orchestrator.request_approval(
@@ -170,6 +172,7 @@ async def demo_supervised_scenario():
 
     # Apply modifications and continue
     orchestrator.submit_approval(workflow_id, response)
+    await x402.close()
 
     print("🤖 Agent: Modifications applied, continuing...")
     print("🤖 Agent: Ordering catering with corrected quantities...")
@@ -196,7 +199,8 @@ async def demo_rollback_scenario():
     print("SCENARIO 3: ROLLBACK DEMO")
     print("=" * 70 + "\n")
 
-    orchestrator = WorkflowOrchestrator()
+    x402 = X402Integration()
+    orchestrator = WorkflowOrchestrator(x402_integration=x402)
 
     config = WorkflowConfig(
         name="Financial Transaction",
@@ -242,7 +246,7 @@ async def demo_rollback_scenario():
         ]
     )
 
-    snapshot = orchestrator.create_checkpoint(workflow_id, execution_state)
+    snapshot = await orchestrator.create_checkpoint(workflow_id, execution_state)
 
     request = orchestrator.request_approval(
         workflow_id,
@@ -283,6 +287,7 @@ async def demo_rollback_scenario():
     await asyncio.sleep(1)
 
     orchestrator.complete_rollback(workflow_id, success=True)
+    await x402.close()
 
     print("✓ SafeRun: Rollback complete - no money transferred\n")
 
