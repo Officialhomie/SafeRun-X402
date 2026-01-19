@@ -274,8 +274,8 @@ class CheckpointManager:
         self,
         artifact_uri: str,
         checkpoint_id: str,
-        x402_client=None
-    ) -> Optional[ExecutionState]:
+        x402_client
+    ) -> ExecutionState:
         """
         Load checkpoint from x402 artifact URI.
 
@@ -288,25 +288,18 @@ class CheckpointManager:
             ExecutionState if successful, None otherwise
         """
         if not x402_client:
-            logger.warning("No x402 client provided, cannot load from artifact")
-            return None
+            raise ValueError("x402_client is required to load checkpoint from artifact")
 
-        try:
-            # Fetch artifact from x402
-            artifact = await x402_client.get_artifact(artifact_uri)
-            
-            # Extract content
-            content = artifact.get("content")
-            if not content:
-                logger.error(f"Artifact {artifact_uri} has no content")
-                return None
+        # Fetch artifact from x402
+        artifact = await x402_client.get_artifact(artifact_uri)
 
-            # Deserialize and store
-            execution_state = self.state_capture.deserialize_state(content)
-            self.checkpoints[checkpoint_id] = execution_state
-            logger.info(f"Loaded checkpoint {checkpoint_id} from artifact {artifact_uri}")
-            return execution_state
+        # Extract content
+        content = artifact.get("content")
+        if not content:
+            raise ValueError(f"Artifact {artifact_uri} has no content")
 
-        except Exception as e:
-            logger.error(f"Failed to load checkpoint from artifact {artifact_uri}: {e}")
-            return None
+        # Deserialize and store
+        execution_state = self.state_capture.deserialize_state(content)
+        self.checkpoints[checkpoint_id] = execution_state
+        logger.info(f"Loaded checkpoint {checkpoint_id} from artifact {artifact_uri}")
+        return execution_state
