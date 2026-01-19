@@ -7,6 +7,7 @@ Tests complete workflows from creation through approval to completion.
 import pytest
 import asyncio
 from datetime import datetime
+import os
 
 from saferun.core.state_machine.orchestrator import WorkflowOrchestrator
 from saferun.core.state_machine.models import (
@@ -22,15 +23,33 @@ from saferun.agents.executor.agent import ExecutorAgent
 from saferun.agents.monitor.agent import MonitorAgent
 from saferun.agents.supervisor.agent import SupervisorAgent
 from saferun.core.rollback.reconciliation import ReconciliationAgent
+from saferun.api.x402.client import X402Integration
+
+
+def _require_x402():
+    if (
+        not os.getenv("X402_API_KEY")
+        or not os.getenv("X402_API_URL")
+        or os.getenv("X402_API_URL") == "https://api.x402.io"
+    ):
+        pytest.skip("Real x402 credentials not configured (X402_API_KEY/X402_API_URL).")
+
+
+def _require_anthropic():
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        pytest.skip("Anthropic API key not configured (ANTHROPIC_API_KEY).")
 
 
 class TestCompleteWorkflow:
     """Test a complete workflow from start to finish"""
 
-    def test_complete_approval_workflow(self):
+    @pytest.mark.asyncio
+    async def test_complete_approval_workflow(self):
         """Test workflow with approval and completion"""
         # Setup
-        orchestrator = WorkflowOrchestrator()
+        _require_x402()
+        x402 = X402Integration()
+        orchestrator = WorkflowOrchestrator(x402_integration=x402)
         checkpoint_manager = CheckpointManager()
 
         # Create workflow config
@@ -84,7 +103,7 @@ class TestCompleteWorkflow:
         assert checkpoint_1.checkpoint_id == config.checkpoints[0].checkpoint_id
 
         # Create checkpoint in orchestrator
-        snapshot_1 = orchestrator.create_checkpoint(workflow_id, exec_state_1)
+        snapshot_1 = await orchestrator.create_checkpoint(workflow_id, exec_state_1)
         assert snapshot_1 is not None
 
         # Request approval
@@ -133,7 +152,7 @@ class TestCompleteWorkflow:
             intermediate_outputs={"output_2": "result_2"}
         )
 
-        snapshot_2 = orchestrator.create_checkpoint(workflow_id, exec_state_2)
+        snapshot_2 = await orchestrator.create_checkpoint(workflow_id, exec_state_2)
         request_2 = orchestrator.request_approval(
             workflow_id,
             snapshot_2.snapshot_id,
@@ -169,10 +188,14 @@ class TestCompleteWorkflow:
         assert execution.completed_at is not None
         assert len(execution.snapshots) == 2
         assert len(execution.approval_responses) == 2
+        await x402.close()
 
-    def test_workflow_with_modification(self):
+    @pytest.mark.asyncio
+    async def test_workflow_with_modification(self):
         """Test workflow where human modifies the plan"""
-        orchestrator = WorkflowOrchestrator()
+        _require_x402()
+        x402 = X402Integration()
+        orchestrator = WorkflowOrchestrator(x402_integration=x402)
 
         config = WorkflowConfig(
             name="Modification Test",
@@ -196,7 +219,7 @@ class TestCompleteWorkflow:
             intermediate_outputs={"calculation": "10 * 10 = 100"}
         )
 
-        snapshot = orchestrator.create_checkpoint(workflow_id, exec_state)
+        snapshot = await orchestrator.create_checkpoint(workflow_id, exec_state)
         request = orchestrator.request_approval(
             workflow_id,
             snapshot.snapshot_id,
@@ -227,10 +250,14 @@ class TestCompleteWorkflow:
         assert orchestrator.submit_approval(workflow_id, response)
         execution = orchestrator.get_workflow(workflow_id)
         assert execution.current_state == WorkflowState.SETTLING
+        await x402.close()
 
-    def test_workflow_with_rejection_and_rollback(self):
+    @pytest.mark.asyncio
+    async def test_workflow_with_rejection_and_rollback(self):
         """Test workflow rejection triggers rollback"""
-        orchestrator = WorkflowOrchestrator()
+        _require_x402()
+        x402 = X402Integration()
+        orchestrator = WorkflowOrchestrator(x402_integration=x402)
 
         config = WorkflowConfig(
             name="Rollback Test",
@@ -260,7 +287,7 @@ class TestCompleteWorkflow:
             ]
         )
 
-        snapshot = orchestrator.create_checkpoint(workflow_id, exec_state)
+        snapshot = await orchestrator.create_checkpoint(workflow_id, exec_state)
         request = orchestrator.request_approval(
             workflow_id,
             snapshot.snapshot_id,
@@ -292,6 +319,7 @@ class TestCompleteWorkflow:
         assert orchestrator.complete_rollback(workflow_id, success=True)
         execution = orchestrator.get_workflow(workflow_id)
         assert execution.current_state == WorkflowState.EXECUTING
+        await x402.close()
 
 
 @pytest.mark.asyncio
@@ -300,6 +328,7 @@ class TestAgentIntegration:
 
     async def test_executor_with_monitor(self):
         """Test executor agent with monitor watching"""
+        _require_anthropic()
         executor = ExecutorAgent(agent_id="test_executor")
         monitor = MonitorAgent(monitor_id="test_monitor")
 
@@ -327,7 +356,10 @@ class TestAgentIntegration:
 
     async def test_full_agent_workflow(self):
         """Test all agents working together in a workflow"""
-        orchestrator = WorkflowOrchestrator()
+        _require_x402()
+        _require_anthropic()
+        x402 = X402Integration()
+        orchestrator = WorkflowOrchestrator(x402_integration=x402)
         executor = ExecutorAgent(agent_id="executor")
         monitor = MonitorAgent(monitor_id="monitor")
         supervisor = SupervisorAgent(supervisor_id="supervisor")
@@ -365,7 +397,7 @@ class TestAgentIntegration:
         )
 
         # Create checkpoint
-        snapshot = orchestrator.create_checkpoint(workflow_id, exec_state)
+        snapshot = await orchestrator.create_checkpoint(workflow_id, exec_state)
         request = orchestrator.request_approval(
             workflow_id,
             snapshot.snapshot_id,
@@ -401,6 +433,7 @@ class TestAgentIntegration:
         stats = supervisor.get_approval_stats()
         assert stats["total_approvals"] == 1
         assert stats["decision_breakdown"]["approved"] == 1
+        await x402.close()
 
 
 class TestCheckpointPersistence:
@@ -437,6 +470,7 @@ class TestCheckpointPersistence:
     def test_checkpoint_restoration(self):
         """Test agent can restore from checkpoint"""
         manager = CheckpointManager()
+        _require_anthropic()
         executor = ExecutorAgent(agent_id="test")
 
         # Set initial state
@@ -476,7 +510,7 @@ class TestReconciliation:
         """Test complete reconciliation flow"""
         reconciliation_agent = ReconciliationAgent()
 
-        # Create mock execution state
+        # Create synthetic execution state
         exec_state = ExecutionState(
             checkpoint_id="test_cp",
             agent_memory={"task": "test"},
@@ -491,7 +525,8 @@ class TestReconciliation:
         report = await reconciliation_agent.reconcile_workflow(
             workflow_id="test_wf",
             checkpoint_state=exec_state,
-            rejection_reason="Test rejection"
+            rejection_reason="Test rejection",
+            escrow_amount=100.0
         )
 
         assert "workflow_id" in report
